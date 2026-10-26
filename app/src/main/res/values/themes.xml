@@ -1,0 +1,7 @@
+<resources>
+    <style name="Theme.CarLyrics" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">#FF101018</item>
+        <item name="android:statusBarColor">#FF101018</item>
+        <item name="android:navigationBarColor">#FF101018</item>
+    </style>
+</resources>
