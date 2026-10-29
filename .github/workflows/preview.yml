@@ -1,0 +1,28 @@
+name: Preview screenshots (temporary)
+on:
+  push:
+    branches: [tmp-preview-screens]
+permissions:
+  contents: write
+jobs:
+  shots:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - run: ./gradlew --no-daemon testDebugUnitTest --tests '*ScreenshotTest*'
+      - name: Publish screenshots to a branch
+        run: |
+          mkdir -p /tmp/shots && cp app/build/screenshots/*.png /tmp/shots/
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git checkout --orphan tmp-preview-output
+          git rm -rq --cached .
+          cp /tmp/shots/*.png .
+          git add *.png
+          git commit -qm "Preview screenshots"
+          git push -f origin tmp-preview-output
