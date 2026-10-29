@@ -23,7 +23,9 @@ It is meant for sideloading onto your own phone. It will never pass Play Store r
 | Permission hook | `media/NowPlayingListenerService.kt` | An empty `NotificationListenerService`. Android only lets apps with notification access read other apps' media sessions. Notifications themselves are never read. |
 | Lyrics | `lyrics/LrcLibClient.kt`, `lyrics/LyricsController.kt` | Tries an exact LRCLIB match (title, artist, album, duration), then cleaned-up searches ("- Remastered 2011", "feat. X" and similar get stripped). Results are cached in app storage so songs you've played before work without signal. |
 | Parsing | `lyrics/LrcParser.kt` | Parses LRC files, including word-level "enhanced LRC". LRCLIB is usually line-level, so word timing is estimated from word length. Long gaps become interludes. |
-| Drawing | `render/KaraokeRenderer.kt` | Plain `Canvas` drawing shared by the car and phone screens. The background colour comes from the cover art. |
+| Cover art | `art/CoverArtRepository.kt` | Takes the cover the music app embeds in its media session. If there isn't one, it tries the app's cover link (`content://` or `https://`). Only if both are missing does it look the song up on the iTunes Search API. |
+| Colour theme | `art/ArtTheme.kt`, `art/Backdrop.kt` | AndroidX Palette picks the cover's tones: dark ones for the background, a bright one as accent (progress bar, tint of unsung lyrics). A soft-focus, darkened copy of the cover is used as the backdrop. |
+| Drawing | `render/KaraokeRenderer.kt` | Plain `Canvas` drawing shared by the car and phone screens. Lyrics use the full screen; the cover fills the background behind them, slowly drifting, under a scrim so the text stays readable. A thin progress bar runs along the bottom edge. |
 | Car screen | `car/LyricsScreen.kt`, `car/SurfaceRenderer.kt` | A `NavigationTemplate` with a small action strip (sync −0.25 s, sync +0.25 s, search again) on top of a surface the app repaints every frame. |
 
 ## How it gets onto the car screen (and the tradeoffs)
@@ -77,4 +79,4 @@ $ANDROID_SDK/extras/google/auto/desktop-head-unit
 
 ## Tests
 
-`./gradlew testDebugUnitTest` runs the JVM tests for the LRC parser and title cleanup.
+`./gradlew testDebugUnitTest` runs the JVM tests for the LRC parser and title cleanup. It also runs `ScreenshotTest`, which renders the car and phone screens with sample covers into `app/build/screenshots/*.png` using Robolectric. The GitHub workflow uploads those images as the `screenshots` artifact, so you can see UI changes without a car.

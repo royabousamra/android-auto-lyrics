@@ -22,3 +22,7 @@ jobs:
         with:
           name: car-lyrics-debug-apk
           path: app/build/outputs/apk/debug/*.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: screenshots
+          path: app/build/screenshots/*.png

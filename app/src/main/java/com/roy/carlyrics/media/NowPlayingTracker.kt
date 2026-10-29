@@ -37,8 +37,13 @@ object NowPlayingTracker {
     private val controllers = LinkedHashMap<MediaSession.Token, Tracked>()
     private var current: MediaSession.Token? = null
 
-    private class Tracked(val controller: MediaController, val callback: MediaController.Callback) {
+    private class Tracked(val controller: MediaController) {
+        lateinit var callback: MediaController.Callback
         var lastPlayingAt = 0L
+
+        // Cached from callbacks: reading controller.metadata is a binder call that copies the
+        // cover bitmap every time, and a stable bitmap instance lets us detect real art changes.
+        var metadata: MediaMetadata? = controller.metadata
     }
 
     private val sessionsListener = MediaSessionManager.OnActiveSessionsChangedListener { list ->
@@ -93,13 +98,17 @@ object NowPlayingTracker {
         // Track new ones.
         for (controller in active) {
             if (controller.sessionToken in controllers) continue
-            val callback = object : MediaController.Callback() {
+            val tracked = Tracked(controller)
+            tracked.callback = object : MediaController.Callback() {
                 override fun onPlaybackStateChanged(state: PlaybackState?) = refresh()
-                override fun onMetadataChanged(metadata: MediaMetadata?) = refresh()
+                override fun onMetadataChanged(metadata: MediaMetadata?) {
+                    tracked.metadata = metadata
+                    refresh()
+                }
                 override fun onSessionDestroyed() = refresh()
             }
-            controller.registerCallback(callback, main)
-            controllers[controller.sessionToken] = Tracked(controller, callback)
+            controller.registerCallback(tracked.callback, main)
+            controllers[controller.sessionToken] = tracked
         }
         refresh()
     }
@@ -121,14 +130,15 @@ object NowPlayingTracker {
             .maxByOrNull { it.value.lastPlayingAt }
         val chosen = playing?.key
             ?: current?.takeIf { it in controllers }
-            ?: controllers.entries.firstOrNull { it.value.controller.metadata != null }?.key
+            ?: controllers.entries.firstOrNull { it.value.metadata != null }?.key
         current = chosen
 
-        _nowPlaying.value = chosen?.let { controllers[it]?.controller }?.let(::snapshot)
+        _nowPlaying.value = chosen?.let { controllers[it] }?.let(::snapshot)
     }
 
-    private fun snapshot(controller: MediaController): NowPlaying? {
-        val md = controller.metadata ?: return null
+    private fun snapshot(tracked: Tracked): NowPlaying? {
+        val controller = tracked.controller
+        val md = tracked.metadata ?: return null
         var title = md.getString(MediaMetadata.METADATA_KEY_TITLE)
             ?: md.getString(MediaMetadata.METADATA_KEY_DISPLAY_TITLE)
             ?: return null
@@ -167,6 +177,11 @@ object NowPlayingTracker {
             ?: md.getBitmap(MediaMetadata.METADATA_KEY_ART)
             ?: md.getBitmap(MediaMetadata.METADATA_KEY_DISPLAY_ICON)
 
-        return NowPlaying(track, playback, art)
+        // Many players send a link instead of (or as well as) the image itself.
+        val artUri = md.getString(MediaMetadata.METADATA_KEY_ALBUM_ART_URI)
+            ?: md.getString(MediaMetadata.METADATA_KEY_ART_URI)
+            ?: md.getString(MediaMetadata.METADATA_KEY_DISPLAY_ICON_URI)
+
+        return NowPlaying(track, playback, art, artUri?.takeIf { it.isNotBlank() })
     }
 }

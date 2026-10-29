@@ -5,7 +5,6 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
-import android.graphics.Path
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
@@ -13,6 +12,8 @@ import android.graphics.Typeface
 import android.os.Build
 import android.text.TextPaint
 import android.text.TextUtils
+import com.roy.carlyrics.art.ArtTheme
+import com.roy.carlyrics.art.CoverArt
 import com.roy.carlyrics.lyrics.LrcParser
 import com.roy.carlyrics.lyrics.LyricLine
 import com.roy.carlyrics.lyrics.LyricsState
@@ -30,8 +31,10 @@ import kotlin.math.sin
  * surface and by the phone preview, so what you test on the phone is what the car shows.
  *
  * Look and feel:
- *  - large heavy left-aligned text on an album-tinted gradient
- *  - the active line is bright and full size; others are dimmed and slightly smaller
+ *  - lyrics use the whole screen; the song's cover fills the background, soft-focus, dimmed
+ *    and slowly zooming, under a scrim in the cover's own darker tones
+ *  - a colour theme taken from the cover tints the dimmed lyrics and the thin progress bar
+ *  - large heavy left-aligned text; the active line is bright and full size, others dimmed
  *  - words fill left-to-right with a soft edge and lift slightly as they are sung
  *  - lines scroll on springs, lines further down lag a little (the "cascade")
  *  - instrumental gaps show three breathing dots that fill up over the gap
@@ -43,8 +46,11 @@ class KaraokeRenderer {
     data class Frame(
         val nowPlaying: NowPlaying?,
         val lyrics: LyricsState,
-        /** Playback position already corrected by the user offset. */
+        /** Playback position corrected by the user's sync offset; drives the lyrics. */
         val positionMs: Long,
+        /** Raw playback position; drives the progress bar at the bottom edge. */
+        val playbackMs: Long,
+        val cover: CoverArt?,
     )
 
     // ---- Paints ----
@@ -57,25 +63,33 @@ class KaraokeRenderer {
         typeface = heavy
         color = Color.WHITE
     }
-    private val titlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply {
-        typeface = Typeface.create(Typeface.DEFAULT, Typeface.BOLD)
-        color = Color.WHITE
-    }
     private val subtitlePaint = TextPaint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE }
     private val bgPaint = Paint()
-    private val artPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG)
-    private val artClip = Path()
-    private val artRect = RectF()
+    private val scrimPaint = Paint()
+    private val sideScrimPaint = Paint()
+    private val backdropPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val tmpRect = RectF()
 
-    // ---- Background colour animation ----
+    // ---- Theme + cover animation ----
 
-    private var artRef: Bitmap? = null
-    private var targetColors = ArtColors.DEFAULT
-    private val shownColors = ArtColors.DEFAULT.copyOf()
+    private var targetTheme = ArtTheme.DEFAULT
+    /** backgroundTop, backgroundBottom, accent, textTint as currently shown (animated). */
+    private val shown = intArrayOf(
+        ArtTheme.DEFAULT.backgroundTop, ArtTheme.DEFAULT.backgroundBottom,
+        ArtTheme.DEFAULT.accent, ArtTheme.DEFAULT.textTint,
+    )
+    private val accent get() = shown[2]
+    private val tint get() = shown[3]
     private var bgShaderKey = ""
 
-    // ---- Layout ----
+    private var currentCover: CoverArt? = null
+    private var backdrop: Bitmap? = null
+    private var prevBackdrop: Bitmap? = null
+    private var backdropFade = 1f
+
+    // ---- Lyrics layout ----
 
     private class WordBox(val startMs: Long, val endMs: Long, val text: String, val row: Int, val x: Float, val width: Float)
 
@@ -107,86 +121,134 @@ class KaraokeRenderer {
         val now = System.nanoTime()
         val dt = if (lastFrameNanos == 0L) 0f else ((now - lastFrameNanos) / 1e9f).coerceIn(0f, 0.1f)
         lastFrameNanos = now
+        val timeSec = now / 1e9
 
-        drawBackground(canvas, area, frame.nowPlaying?.art, dt)
+        updateCover(frame, dt)
+        drawBackground(canvas, timeSec)
         if (area.width() <= 0 || area.height() <= 0) return
 
         val pad = min(area.width(), area.height()) * 0.06f
-        val baseSize = min(area.height() / 6.5f, area.width() / 13f).coerceAtLeast(18f)
-        val headerHeight = drawHeader(canvas, area, pad, baseSize, frame)
+        val np = frame.nowPlaying
+        if (np != null) {
+            // The only chrome: a hairline progress bar along the bottom edge.
+            val barHeight = max(3f, min(area.width(), area.height()) * 0.006f)
+            drawProgress(canvas, area.left + pad, area.bottom - pad * 0.3f - barHeight, area.width() - pad * 2f,
+                barHeight, frame.playbackMs, np.track.durationMs)
+        }
+        val region = RectF(area.left + pad, area.top + pad * 0.5f, area.right - pad, area.bottom - pad * 0.6f)
 
-        val region = RectF(
-            area.left + pad,
-            area.top + headerHeight + pad * 0.5f,
-            area.right - pad,
-            area.bottom - pad * 0.5f,
-        )
-        if (region.height() < baseSize) return
+        val baseSize = min(region.height() / 6.2f, region.width() / 14f).coerceAtLeast(18f)
+        if (region.height() < baseSize || region.width() < baseSize * 3) return
 
         when (val s = frame.lyrics) {
             is LyricsState.Synced -> drawLyrics(canvas, region, baseSize, s.lyrics.lines, null, frame, dt)
             is LyricsState.Plain -> drawLyrics(canvas, region, baseSize * 0.8f, null, s.lines, frame, dt)
             LyricsState.NoMusic -> drawMessage(canvas, region, baseSize, "Play something", "Lyrics follow whatever music app is playing")
-            is LyricsState.Loading -> drawMessage(canvas, region, baseSize, "Finding lyrics…", null)
-            is LyricsState.Instrumental -> drawMessage(canvas, region, baseSize, "♪  Instrumental", null)
+            is LyricsState.Loading -> drawMessage(canvas, region, baseSize, "Finding lyrics…", "${s.track.artist} – ${s.track.title}")
+            is LyricsState.Instrumental -> drawMessage(canvas, region, baseSize, "♪  Instrumental", "${s.track.artist} – ${s.track.title}")
             is LyricsState.NotFound -> drawMessage(canvas, region, baseSize, "No lyrics found", "${s.track.artist} – ${s.track.title}")
             is LyricsState.Failed -> drawMessage(canvas, region, baseSize, "Couldn't load lyrics", s.message)
         }
     }
 
     // ------------------------------------------------------------------------------------------
-    // Background
+    // Cover + theme state
 
-    private fun drawBackground(canvas: Canvas, area: Rect, art: Bitmap?, dt: Float) {
-        if (art !== artRef) {
-            artRef = art
-            targetColors = ArtColors.from(art)
+    private fun updateCover(frame: Frame, dt: Float) {
+        val np = frame.nowPlaying
+        if (np == null) {
+            if (currentCover != null) {
+                currentCover = null
+                swapBackdrop(null)
+            }
+            targetTheme = ArtTheme.DEFAULT
+        } else {
+            // Keep the previous cover until the new song's cover is ready, so nothing flashes.
+            val cover = frame.cover?.takeIf { it.trackKey == np.track.key }
+            if (cover != null && cover !== currentCover) {
+                currentCover = cover
+                swapBackdrop(cover.backdrop)
+                targetTheme = cover.theme
+            }
         }
-        val k = 1f - exp(-dt * 3f)
-        for (i in 0..1) shownColors[i] = ArtColors.lerp(shownColors[i], targetColors[i], k)
 
-        val w = canvas.width.toFloat()
-        val h = canvas.height.toFloat()
-        val key = "${shownColors[0]}|${shownColors[1]}|$w|$h"
-        if (key != bgShaderKey) {
-            bgShaderKey = key
-            bgPaint.shader = LinearGradient(0f, 0f, w * 0.6f, h, shownColors[0], shownColors[1], Shader.TileMode.CLAMP)
+        backdropFade = min(1f, backdropFade + dt * 1.2f)
+        if (backdropFade >= 1f) prevBackdrop = null
+
+        val k = 1f - exp(-dt * 2.5f)
+        val target = intArrayOf(targetTheme.backgroundTop, targetTheme.backgroundBottom, targetTheme.accent, targetTheme.textTint)
+        for (i in shown.indices) shown[i] = ArtTheme.mix(shown[i], target[i], k)
+    }
+
+    private fun swapBackdrop(newBackdrop: Bitmap?) {
+        if (newBackdrop !== backdrop) {
+            prevBackdrop = backdrop
+            backdrop = newBackdrop
+            backdropFade = 0f
         }
-        canvas.drawRect(0f, 0f, w, h, bgPaint)
     }
 
     // ------------------------------------------------------------------------------------------
-    // Header: small cover + title + artist
+    // Background: theme gradient, then the cover filling the screen, then scrims for contrast
 
-    private fun drawHeader(canvas: Canvas, area: Rect, pad: Float, baseSize: Float, frame: Frame): Float {
-        val np = frame.nowPlaying ?: return pad
-        val size = baseSize * 1.1f
-        val left = area.left + pad
-        val top = area.top + pad * 0.8f
-        var textLeft = left
-
-        np.art?.takeIf { !it.isRecycled }?.let { art ->
-            artRect.set(left, top, left + size, top + size)
-            artClip.reset()
-            artClip.addRoundRect(artRect, size * 0.12f, size * 0.12f, Path.Direction.CW)
-            canvas.save()
-            canvas.clipPath(artClip)
-            canvas.drawBitmap(art, null, artRect, artPaint)
-            canvas.restore()
-            textLeft = left + size + pad * 0.5f
+    private fun drawBackground(canvas: Canvas, timeSec: Double) {
+        val w = canvas.width.toFloat()
+        val h = canvas.height.toFloat()
+        val key = "${shown[0]}|${shown[1]}|$w|$h"
+        if (key != bgShaderKey) {
+            bgShaderKey = key
+            bgPaint.shader = LinearGradient(0f, 0f, w * 0.6f, h, shown[0], shown[1], Shader.TileMode.CLAMP)
+            // Lyrics are left-aligned, so the left side gets the heavier scrim and the cover
+            // shows through most on the right.
+            sideScrimPaint.shader = LinearGradient(
+                0f, 0f, w, 0f,
+                intArrayOf(withAlpha(shown[1], 0.72f), withAlpha(shown[1], 0.45f), withAlpha(shown[1], 0.25f)),
+                floatArrayOf(0f, 0.55f, 1f),
+                Shader.TileMode.CLAMP,
+            )
+            scrimPaint.shader = LinearGradient(
+                0f, 0f, 0f, h,
+                intArrayOf(withAlpha(Color.BLACK, 0.10f), withAlpha(Color.BLACK, 0f), withAlpha(Color.BLACK, 0.35f)),
+                floatArrayOf(0f, 0.4f, 1f),
+                Shader.TileMode.CLAMP,
+            )
         }
+        canvas.drawRect(0f, 0f, w, h, bgPaint)
+        drawBackdrop(canvas, prevBackdrop, 1f - backdropFade, w, h, timeSec)
+        drawBackdrop(canvas, backdrop, backdropFade, w, h, timeSec)
+        canvas.drawRect(0f, 0f, w, h, sideScrimPaint)
+        canvas.drawRect(0f, 0f, w, h, scrimPaint)
+    }
 
-        val avail = area.right - pad - textLeft
-        if (avail > 0) {
-            titlePaint.textSize = size * 0.42f
-            subtitlePaint.textSize = size * 0.36f
-            subtitlePaint.alpha = 170
-            val title = TextUtils.ellipsize(np.track.title, titlePaint, avail, TextUtils.TruncateAt.END)
-            val artist = TextUtils.ellipsize(np.track.artist, subtitlePaint, avail, TextUtils.TruncateAt.END)
-            canvas.drawText(title, 0, title.length, textLeft, top + size * 0.45f, titlePaint)
-            canvas.drawText(artist, 0, artist.length, textLeft, top + size * 0.92f, subtitlePaint)
-        }
-        return pad * 0.8f + size
+    /** The cover, centre-cropped to fill the whole surface, with a slow "Ken Burns" drift. */
+    private fun drawBackdrop(canvas: Canvas, b: Bitmap?, alpha: Float, w: Float, h: Float, timeSec: Double) {
+        if (b == null || alpha <= 0.01f) return
+        val zoom = 1.08f + 0.06f * sin(timeSec * 2 * PI / 40.0).toFloat()
+        val driftX = w * 0.02f * sin(timeSec * 2 * PI / 55.0).toFloat()
+        val driftY = h * 0.02f * sin(timeSec * 2 * PI / 47.0).toFloat()
+        val side = max(w, h) * zoom
+        val cx = w / 2f + driftX
+        val cy = h / 2f + driftY
+        tmpRect.set(cx - side / 2f, cy - side / 2f, cx + side / 2f, cy + side / 2f)
+        backdropPaint.alpha = (alpha * 255).toInt()
+        canvas.drawBitmap(b, null, tmpRect, backdropPaint)
+    }
+
+    private fun drawProgress(canvas: Canvas, left: Float, top: Float, width: Float, height: Float, positionMs: Long, durationMs: Long) {
+        if (durationMs <= 0) return
+        val p = (positionMs.toFloat() / durationMs).coerceIn(0f, 1f)
+        val r = height / 2f
+        fillPaint.color = withAlpha(Color.WHITE, 0.22f)
+        tmpRect.set(left, top, left + width, top + height)
+        canvas.drawRoundRect(tmpRect, r, r, fillPaint)
+        fillPaint.color = accent
+        tmpRect.set(left, top, left + max(height, width * p), top + height)
+        canvas.drawRoundRect(tmpRect, r, r, fillPaint)
+    }
+
+    private fun formatTime(ms: Long): String {
+        val s = (ms.coerceAtLeast(0L) / 1000)
+        return "%d:%02d".format(s / 60, s % 60)
     }
 
     // ------------------------------------------------------------------------------------------
@@ -195,17 +257,18 @@ class KaraokeRenderer {
     private fun drawMessage(canvas: Canvas, region: RectF, baseSize: Float, title: String, subtitle: String?) {
         lyricPaint.shader = null
         lyricPaint.textSize = baseSize * 0.8f
-        lyricPaint.alpha = 235
+        lyricPaint.color = withAlpha(Color.WHITE, 0.92f)
         val cy = region.centerY()
         canvas.drawText(title, region.left, cy, lyricPaint)
         if (subtitle != null) {
             subtitlePaint.textSize = baseSize * 0.4f
-            subtitlePaint.alpha = 160
+            subtitlePaint.color = withAlpha(tint, 0.65f)
             val s = TextUtils.ellipsize(subtitle, subtitlePaint, region.width(), TextUtils.TruncateAt.END)
             canvas.drawText(s, 0, s.length, region.left, cy + baseSize * 0.75f, subtitlePaint)
         }
         layoutKey = null // force a fresh layout + snap when lyrics arrive
     }
+
 
     // ------------------------------------------------------------------------------------------
     // Lyrics
@@ -412,7 +475,7 @@ class KaraokeRenderer {
                 val soft = 0.25f
                 val f = p * (1f + soft)
                 val c0 = withAlpha(Color.WHITE, sungAlpha * edgeFade)
-                val c1 = withAlpha(Color.WHITE, unsungAlpha * edgeFade)
+                val c1 = withAlpha(tint, unsungAlpha * edgeFade)
                 lyricPaint.shader = LinearGradient(
                     x, 0f, x + w.width, 0f,
                     intArrayOf(c0, c0, c1, c1),
@@ -424,8 +487,10 @@ class KaraokeRenderer {
                 lyricPaint.shader = null
             } else {
                 lyricPaint.shader = null
+                // Sung words are pure white; everything else carries a hint of the cover's colour.
                 val alpha = if (p >= 1f) sungAlpha else if (a > 0.02f) unsungAlpha else idleAlpha
-                lyricPaint.color = withAlpha(Color.WHITE, alpha * edgeFade)
+                val base = if (p >= 1f && a > 0.02f) ArtTheme.mix(tint, Color.WHITE, a) else tint
+                lyricPaint.color = withAlpha(base, alpha * edgeFade)
                 canvas.drawText(w.text, x, baseline + dy, lyricPaint)
             }
         }
@@ -435,7 +500,7 @@ class KaraokeRenderer {
     private fun drawPlainLine(canvas: Canvas, box: LineBox, left: Float, top: Float, edgeFade: Float) {
         lyricPaint.shader = null
         lyricPaint.textSize = textSize
-        lyricPaint.color = withAlpha(Color.WHITE, 0.85f * edgeFade)
+        lyricPaint.color = withAlpha(tint, 0.85f * edgeFade)
         val ascent = -lyricPaint.ascent()
         for (w in box.words) {
             canvas.drawText(w.text, left + w.x, top + w.row * rowHeight + ascent, lyricPaint)
@@ -454,7 +519,7 @@ class KaraokeRenderer {
         val cy = top + box.height * 0.5f
         for (k in 0 until 3) {
             val fill = (p * 3f - k).coerceIn(0f, 1f)
-            dotPaint.color = withAlpha(Color.WHITE, (0.3f + 0.7f * fill) * visibility)
+            dotPaint.color = withAlpha(ArtTheme.mix(tint, Color.WHITE, fill), (0.3f + 0.7f * fill) * visibility)
             canvas.drawCircle(left + r + k * textSize * 0.42f, cy, r, dotPaint)
         }
     }

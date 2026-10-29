@@ -38,5 +38,8 @@ data class PlaybackSnapshot(
 data class NowPlaying(
     val track: Track,
     val playback: PlaybackSnapshot,
+    /** Cover image embedded in the media session, if the player provides one. */
     val art: Bitmap?,
+    /** Cover image link (content:// or https://) from the media session, if any. */
+    val artUri: String? = null,
 )
