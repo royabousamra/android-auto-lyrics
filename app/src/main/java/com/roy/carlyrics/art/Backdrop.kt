@@ -4,13 +4,13 @@ import android.graphics.Bitmap
 import android.graphics.Color
 
 /**
- * Builds the soft-focus, darkened copy of the cover that fills the screen behind the lyrics.
- * It is small (128 px) and lightly blurred: drawn stretched with bilinear filtering, the cover
- * stays recognisable but no detail competes with the text.
+ * Builds the heavily blurred, darkened colour wash that fills the screen behind the cover and
+ * the lyrics. It is tiny (48 px); drawn stretched with bilinear filtering it is a smooth blend of
+ * the cover's colours.
  */
 object Backdrop {
 
-    private const val SIZE = 128
+    private const val SIZE = 48
 
     fun from(cover: Bitmap): Bitmap {
         // Centre-crop to a square first so non-square art (video thumbnails) isn't squashed.
@@ -20,14 +20,14 @@ object Backdrop {
         val px = IntArray(SIZE * SIZE)
         small.getPixels(px, 0, SIZE, 0, 0, SIZE, SIZE)
 
-        repeat(2) { boxBlur(px, SIZE, SIZE, radius = 2) }
+        repeat(3) { boxBlur(px, SIZE, SIZE, radius = 4) }
 
         // Cap brightness and lift saturation a little so white lyrics always have contrast.
         val hsv = FloatArray(3)
         for (i in px.indices) {
             Color.colorToHSV(px[i], hsv)
-            hsv[1] = (hsv[1] * 1.1f).coerceAtMost(1f)
-            hsv[2] = hsv[2].coerceAtMost(0.62f)
+            hsv[1] = (hsv[1] * 1.15f).coerceAtMost(1f)
+            hsv[2] = hsv[2].coerceAtMost(0.55f)
             px[i] = Color.HSVToColor(hsv)
         }
         return Bitmap.createBitmap(px, SIZE, SIZE, Bitmap.Config.ARGB_8888)

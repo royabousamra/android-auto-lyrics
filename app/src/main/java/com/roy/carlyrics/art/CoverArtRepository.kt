@@ -29,7 +29,7 @@ class CoverArt(
     val trackKey: String,
     /** The cover itself, or null if none could be found. */
     val image: Bitmap?,
-    /** Soft-focus, darkened copy of the cover that fills the background. */
+    /** Blurred, darkened colour wash made from the cover, for the far background. */
     val backdrop: Bitmap?,
     val theme: ArtTheme,
     val source: Source,

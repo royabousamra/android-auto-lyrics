@@ -4,7 +4,10 @@ import android.graphics.Bitmap
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
+import android.graphics.LightingColorFilter
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
 import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
@@ -31,8 +34,9 @@ import kotlin.math.sin
  * surface and by the phone preview, so what you test on the phone is what the car shows.
  *
  * Look and feel:
- *  - lyrics use the whole screen; the song's cover fills the background, soft-focus, dimmed
- *    and slowly zooming, under a scrim in the cover's own darker tones
+ *  - lyrics use the whole screen; the song's cover sits behind them as a background: dimmed,
+ *    full height on the right of wide (car) screens or full width at the top of tall (phone)
+ *    screens, fading into a slowly drifting blurred wash of its own colours
  *  - a colour theme taken from the cover tints the dimmed lyrics and the thin progress bar
  *  - large heavy left-aligned text; the active line is bright and full size, others dimmed
  *  - words fill left-to-right with a soft edge and lift slightly as they are sung
@@ -69,6 +73,14 @@ class KaraokeRenderer {
     private val scrimPaint = Paint()
     private val sideScrimPaint = Paint()
     private val backdropPaint = Paint(Paint.FILTER_BITMAP_FLAG)
+    // Cover drawn at ~60% brightness so lyrics on top stay readable.
+    private val coverPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG).apply {
+        colorFilter = LightingColorFilter(0x9A9A9A, 0)
+    }
+    private val coverMaskPaint = Paint().apply { xfermode = PorterDuffXfermode(PorterDuff.Mode.DST_IN) }
+    private var coverMaskKey = ""
+    private val coverRect = RectF()
+    private val srcRect = Rect()
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val tmpRect = RectF()
 
@@ -85,6 +97,9 @@ class KaraokeRenderer {
     private var bgShaderKey = ""
 
     private var currentCover: CoverArt? = null
+    private var image: Bitmap? = null
+    private var prevImage: Bitmap? = null
+    private var imageFade = 1f
     private var backdrop: Bitmap? = null
     private var prevBackdrop: Bitmap? = null
     private var backdropFade = 1f
@@ -159,7 +174,7 @@ class KaraokeRenderer {
         if (np == null) {
             if (currentCover != null) {
                 currentCover = null
-                swapBackdrop(null)
+                swapImages(null, null)
             }
             targetTheme = ArtTheme.DEFAULT
         } else {
@@ -167,12 +182,14 @@ class KaraokeRenderer {
             val cover = frame.cover?.takeIf { it.trackKey == np.track.key }
             if (cover != null && cover !== currentCover) {
                 currentCover = cover
-                swapBackdrop(cover.backdrop)
+                swapImages(cover.image, cover.backdrop)
                 targetTheme = cover.theme
             }
         }
 
+        imageFade = min(1f, imageFade + dt * 1.5f)
         backdropFade = min(1f, backdropFade + dt * 1.2f)
+        if (imageFade >= 1f) prevImage = null
         if (backdropFade >= 1f) prevBackdrop = null
 
         val k = 1f - exp(-dt * 2.5f)
@@ -180,7 +197,12 @@ class KaraokeRenderer {
         for (i in shown.indices) shown[i] = ArtTheme.mix(shown[i], target[i], k)
     }
 
-    private fun swapBackdrop(newBackdrop: Bitmap?) {
+    private fun swapImages(newImage: Bitmap?, newBackdrop: Bitmap?) {
+        if (newImage !== image) {
+            prevImage = image
+            image = newImage
+            imageFade = 0f
+        }
         if (newBackdrop !== backdrop) {
             prevBackdrop = backdrop
             backdrop = newBackdrop
@@ -189,7 +211,7 @@ class KaraokeRenderer {
     }
 
     // ------------------------------------------------------------------------------------------
-    // Background: theme gradient, then the cover filling the screen, then scrims for contrast
+    // Background: theme gradient, blurred colour wash, the cover itself, then scrims for contrast
 
     private fun drawBackground(canvas: Canvas, timeSec: Double) {
         val w = canvas.width.toFloat()
@@ -216,11 +238,13 @@ class KaraokeRenderer {
         canvas.drawRect(0f, 0f, w, h, bgPaint)
         drawBackdrop(canvas, prevBackdrop, 1f - backdropFade, w, h, timeSec)
         drawBackdrop(canvas, backdrop, backdropFade, w, h, timeSec)
+        drawCover(canvas, prevImage, 1f - imageFade, w, h, timeSec)
+        drawCover(canvas, image, imageFade, w, h, timeSec)
         canvas.drawRect(0f, 0f, w, h, sideScrimPaint)
         canvas.drawRect(0f, 0f, w, h, scrimPaint)
     }
 
-    /** The cover, centre-cropped to fill the whole surface, with a slow "Ken Burns" drift. */
+    /** The blurred wash, filling the whole surface, with a slow "Ken Burns" drift. */
     private fun drawBackdrop(canvas: Canvas, b: Bitmap?, alpha: Float, w: Float, h: Float, timeSec: Double) {
         if (b == null || alpha <= 0.01f) return
         val zoom = 1.08f + 0.06f * sin(timeSec * 2 * PI / 40.0).toFloat()
@@ -249,6 +273,49 @@ class KaraokeRenderer {
     private fun formatTime(ms: Long): String {
         val s = (ms.coerceAtLeast(0L) / 1000)
         return "%d:%02d".format(s / 60, s % 60)
+    }
+
+    /**
+     * The cover as a background image: a square filling the height on the right of wide screens,
+     * or the width at the top of tall ones, faded out towards the lyrics with a gradient mask.
+     */
+    private fun drawCover(canvas: Canvas, bmp: Bitmap?, alpha: Float, w: Float, h: Float, timeSec: Double) {
+        if (bmp == null || bmp.isRecycled || alpha <= 0.01f) return
+        val wide = w >= h
+        val size = if (wide) h else w
+        if (wide) coverRect.set(w - size, 0f, w, size) else coverRect.set(0f, 0f, size, size)
+
+        val key = "$wide|$w|$h"
+        if (key != coverMaskKey) {
+            coverMaskKey = key
+            coverMaskPaint.shader = if (wide) {
+                LinearGradient(coverRect.left, 0f, coverRect.left + size * 0.6f, 0f,
+                    intArrayOf(0x00000000, 0x99000000.toInt(), 0xFF000000.toInt()), floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP)
+            } else {
+                LinearGradient(0f, coverRect.bottom, 0f, coverRect.bottom - size * 0.6f,
+                    intArrayOf(0x00000000, 0x99000000.toInt(), 0xFF000000.toInt()), floatArrayOf(0f, 0.55f, 1f),
+                    Shader.TileMode.CLAMP)
+            }
+        }
+
+        // Centre-crop non-square covers (e.g. video thumbnails).
+        val side = min(bmp.width, bmp.height)
+        val sx = (bmp.width - side) / 2
+        val sy = (bmp.height - side) / 2
+        srcRect.set(sx, sy, sx + side, sy + side)
+
+        canvas.saveLayer(coverRect, null)
+        // Very slow breathing zoom, anchored to the screen edge the cover sits against.
+        val zoom = 1.02f + 0.02f * sin(timeSec * 2 * PI / 30.0).toFloat()
+        canvas.save()
+        if (wide) canvas.scale(zoom, zoom, coverRect.right, coverRect.centerY())
+        else canvas.scale(zoom, zoom, coverRect.centerX(), coverRect.top)
+        coverPaint.alpha = (alpha * 255).toInt()
+        canvas.drawBitmap(bmp, srcRect, coverRect, coverPaint)
+        canvas.restore()
+        canvas.drawRect(coverRect, coverMaskPaint)
+        canvas.restore()
     }
 
     // ------------------------------------------------------------------------------------------
