@@ -22,7 +22,7 @@ It is meant for sideloading onto your own phone. It will never pass Play Store r
 | Now playing | `media/NowPlayingTracker.kt` | Uses `MediaSessionManager.getActiveSessions()` to read the title, artist, duration, cover art and playback position from any music app. It picks the session that most recently started playing. |
 | Permission hook | `media/NowPlayingListenerService.kt` | An empty `NotificationListenerService`. Android only lets apps with notification access read other apps' media sessions. Notifications themselves are never read. |
 | Lyrics | `lyrics/LrcLibClient.kt`, `lyrics/LyricsController.kt` | Tries an exact LRCLIB match (title, artist, album, duration), then cleaned-up searches ("- Remastered 2011", "feat. X" and similar get stripped). Results are cached in app storage so songs you've played before work without signal. |
-| Parsing | `lyrics/LrcParser.kt` | Parses LRC files, including word-level "enhanced LRC". LRCLIB is usually line-level, so word timing is estimated from word length. Long gaps become interludes. |
+| Parsing | `lyrics/LrcParser.kt` | Parses LRC files. Lyrics are highlighted line by line. Word-by-word highlighting is used only when the lyrics are in "enhanced LRC" with real per-word timestamps; word timing is never estimated. Long gaps become interludes. |
 | Cover art | `art/CoverArtRepository.kt` | Takes the cover the music app embeds in its media session. If there isn't one, it tries the app's cover link (`content://` or `https://`). Only if both are missing does it look the song up on the iTunes Search API. |
 | Colour theme | `art/ArtTheme.kt`, `art/Backdrop.kt` | AndroidX Palette picks the cover's tones: dark ones for the background, a bright one as accent (progress bar, tint of unsung lyrics). A soft-focus, darkened copy of the cover is used as the backdrop. |
 | Drawing | `render/KaraokeRenderer.kt` | Plain `Canvas` drawing shared by the car and phone screens. Lyrics use the full screen; the cover fills the background behind them, slowly drifting, under a scrim so the text stays readable. A thin progress bar runs along the bottom edge. |
@@ -72,7 +72,7 @@ $ANDROID_SDK/extras/google/auto/desktop-head-unit
 
 ## Known limitations
 
-- **Word timing is usually estimated.** LRCLIB mostly has line timing, so the fill within a line is a good guess, not exact. Songs that have word-level timing in LRCLIB use it automatically.
+- **Most songs highlight line by line.** LRCLIB mostly has line timing only. Songs whose lyrics include word-level timing (enhanced LRC) fill in word by word automatically.
 - **Sync relies on the music app.** Apps report position correctly in general, but Bluetooth or car audio delay can make the lyrics run a little early. Use **+** once and it's remembered for that song.
 - **LRCLIB coverage** is very good for popular music and patchy for obscure tracks. Unsynced lyrics are shown as slow-scrolling plain text.
 - **Video or podcast apps** also publish media sessions, so a playing YouTube video will be picked up as well.

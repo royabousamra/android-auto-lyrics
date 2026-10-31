@@ -25,12 +25,13 @@ class LrcParserTest {
     }
 
     @Test
-    fun estimatedWordsStayInsideLineAndAreOrdered() {
+    fun lineLevelLyricsHaveNoEstimatedWordTiming() {
         val lines = sung(LrcParser.parse("[00:10.00]one two three four\n[00:20.00]next"))
-        val words = lines[0].words
-        assertEquals(10_000L, words.first().startMs)
-        assertTrue(words.last().endMs <= 20_000L)
-        words.zipWithNext().forEach { (a, b) -> assertEquals(a.endMs, b.startMs) }
+        val l = lines[0]
+        assertFalse(l.hasRealWordTiming)
+        assertEquals(listOf("one ", "two ", "three ", "four"), l.words.map { it.text })
+        // Every word shares the line's start, so the whole line lights up together.
+        assertTrue(l.words.all { it.startMs == 10_000L && it.endMs == 10_000L })
     }
 
     @Test

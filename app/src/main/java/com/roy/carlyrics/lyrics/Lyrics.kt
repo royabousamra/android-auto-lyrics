@@ -14,7 +14,11 @@ sealed interface LyricLine {
     val startMs: Long
     val endMs: Long
 
-    /** A sung line. [words] always has timings: real ones from enhanced LRC, or estimated ones. */
+    /**
+     * A sung line. With [hasRealWordTiming] (enhanced LRC) each word has its own timing and the
+     * line fills word by word; otherwise every word carries the line's start and the whole line
+     * is highlighted at once.
+     */
     data class Sung(
         override val startMs: Long,
         override val endMs: Long,

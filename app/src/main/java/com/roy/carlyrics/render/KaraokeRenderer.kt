@@ -39,7 +39,8 @@ import kotlin.math.sin
  *    screens, fading into a slowly drifting blurred wash of its own colours
  *  - a colour theme taken from the cover tints the dimmed lyrics and the thin progress bar
  *  - large heavy left-aligned text; the active line is bright and full size, others dimmed
- *  - words fill left-to-right with a soft edge and lift slightly as they are sung
+ *  - lines light up as a whole; only lyrics with real word timing (enhanced LRC) fill
+ *    word by word, left-to-right with a soft edge, lifting slightly as they are sung
  *  - lines scroll on springs, lines further down lag a little (the "cascade")
  *  - instrumental gaps show three breathing dots that fill up over the gap
  *
@@ -514,6 +515,7 @@ class KaraokeRenderer {
         edgeFade: Float,
     ) {
         val a = activeness[index]
+        val line = box.line as LyricLine.Sung
         val distance = if (active < 0) index + 1 else abs(index - active)
         val idleAlpha = (if (index < active) 0.30f else 0.42f) * (1f - min(0.5f, distance * 0.07f))
 
@@ -529,7 +531,9 @@ class KaraokeRenderer {
         for (w in box.words) {
             val x = left + w.x
             val baseline = top + w.row * rowHeight + ascent
-            val p = progress(pos, w.startMs, w.endMs)
+            // Word-by-word fill only with real word timing; otherwise the whole line at once.
+            val p = if (line.hasRealWordTiming) progress(pos, w.startMs, w.endMs)
+            else if (pos >= line.startMs) 1f else 0f
 
             // Sung words of the active line rise a touch, like Apple Music.
             val dy = -lift * a * easeOut(p)

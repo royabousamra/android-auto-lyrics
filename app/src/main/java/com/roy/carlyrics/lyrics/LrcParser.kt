@@ -9,9 +9,8 @@ package com.roy.carlyrics.lyrics
  *  - enhanced (word-level) tags:  [00:10.00]<00:10.00>Hel<00:10.40>lo <00:10.80>world<00:11.50>
  *  - [offset:+/-ms]
  *
- * LRCLIB almost always returns line-level timing only, so word timing is estimated by
- * spreading each line's sung duration across its words, weighted by length. That is what
- * produces the left-to-right "wipe" even without real word data.
+ * Lyrics are highlighted line by line. Word-by-word timing is used only when the lyrics really
+ * contain it (enhanced LRC word tags); it is never estimated.
  */
 object LrcParser {
 
@@ -77,7 +76,7 @@ object LrcParser {
                 minOf(nextStart, r.timeMs + estimatedSungMs)
             }
 
-            val words = realWords ?: estimateWords(plain, r.timeMs, sungEnd)
+            val words = realWords ?: lineWords(plain, r.timeMs)
 
             if (out.isEmpty() && r.timeMs >= INTRO_MIN_MS) {
                 out += LyricLine.Interlude(startMs = 0L, endMs = r.timeMs)
@@ -129,24 +128,12 @@ object LrcParser {
         return words
     }
 
-    /** Spreads [startMs, endMs] over the words of [text], weighted by word length. */
-    fun estimateWords(text: String, startMs: Long, endMs: Long): List<Word> {
-        val tokens = tokenize(text)
-        if (tokens.isEmpty()) return emptyList()
-        val weights = tokens.map { it.trim().length.coerceAtLeast(1) + 1 }
-        val total = weights.sum().toDouble()
-        val span = (endMs - startMs).coerceAtLeast(1L)
-
-        val words = ArrayList<Word>(tokens.size)
-        var acc = 0
-        for ((i, token) in tokens.withIndex()) {
-            val s = startMs + (span * (acc / total)).toLong()
-            acc += weights[i]
-            val e = startMs + (span * (acc / total)).toLong()
-            words += Word(token, s, e)
-        }
-        return words
-    }
+    /**
+     * Words of a line-level line. They are only layout tokens for word wrapping: all of them
+     * carry the line's start time, so the whole line lights up at once.
+     */
+    fun lineWords(text: String, startMs: Long): List<Word> =
+        tokenize(text).map { Word(it, startMs, startMs) }
 
     /**
      * Splits a line into display tokens. Each token keeps its trailing whitespace so the renderer
