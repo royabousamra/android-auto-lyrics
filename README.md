@@ -38,7 +38,7 @@ Android Auto doesn't let apps draw whatever they want. Third-party apps must use
 
 What option 3 costs you:
 
-- **It only works sideloaded**, with Android Auto's "Unknown sources" developer setting turned on. The Play Store would reject a navigation app that doesn't navigate.
+- **It can't go through the Play Store's public listing**, which would reject a navigation app that doesn't navigate. And Android Auto only runs Car App Library apps that came from a trusted source such as Google Play. Its "Unknown sources" setting [does not apply to Car App Library apps](https://developer.android.com/training/cars/testing). See "Setting it up" for the ways around this.
 - **It takes the navigation slot.** Android Auto shows one navigation app at a time. While Car Lyrics is open, Google Maps/Waze directions aren't on screen; you switch between them from the launcher, and Maps keeps navigating in the background with voice prompts. On the split-screen (Coolwalk) layout, lyrics fill the big panel and the media card stays in the side panel, which works well.
 - **Android Auto updates could break it.** Google could tighten how unknown-source navigation apps are treated. This approach has worked for years for community apps, but nothing guarantees it.
 - **Driving safety is on you.** The host can't enforce its usual text limits on a free-drawn surface. Keep glances short.
@@ -53,11 +53,13 @@ You need [Android Studio](https://developer.android.com/studio) (any recent vers
 
 ## Setting it up
 
-1. **Install the APK** on your phone (from Android Studio, `adb install`, or by opening the file and allowing installs from that source).
+1. **Install the APK so Android Auto trusts it.** Android Auto ignores Car App Library apps installed by tapping an APK, even with "Unknown sources" on. Use one of these:
+   - **From a computer with adb** (enable USB debugging on the phone): `adb install -r -i com.android.vending app-debug.apk`. The `-i` flag records Google Play as the installer. `-r` reinstalls over an existing copy and keeps its settings. This is a community workaround, not something Google documents.
+   - **Through Google Play Internal App Sharing**, the officially supported route. It needs a Play developer account. Upload the APK, open the share link on the phone, and Play installs it without a review.
 2. **Open Car Lyrics on the phone** and tap "Grant notification access". Find Car Lyrics in the list and switch it on. Then play a song: lyrics should appear in the preview. If the timing is off, the Earlier/Later buttons adjust it (remembered per song).
 3. **Turn on Android Auto developer mode:** Settings → Apps → Android Auto → Additional settings in the app (or search for "Android Auto" in Settings). Scroll down and tap **Version** about 10 times, then accept the prompt.
-4. **Allow unknown sources:** in that same Android Auto settings screen, open the ⋮ menu → **Developer settings** → enable **Unknown sources**.
-5. **Connect to the car.** Car Lyrics should appear in the Android Auto launcher. If not, open "Customize launcher" in Android Auto settings and enable it there. Then reconnect.
+4. **Allow unknown sources** (it doesn't hurt): in that same Android Auto settings screen, open the ⋮ menu → **Developer settings** → enable **Unknown sources**.
+5. **Restart Android Auto and connect to the car.** Force-stop Android Auto (Settings → Apps → Android Auto → Force stop), then reconnect. Car Lyrics should appear in the launcher. If not, check "Customize launcher" in Android Auto settings.
 
 Car screen controls (top right): **−** shows lyrics earlier, **+** shows them later, **↻** searches LRCLIB again and skips the cache.
 
